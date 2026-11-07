@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Cost } from '../components/Cost';
 import NumberFlow from '@number-flow/react';
-import { FolderOpen, Plus, Save, Search, Settings as Gear, Trash2, Zap } from 'lucide-react';
+import { Building2, FolderOpen, Plus, Save, Search, Settings as Gear, SquareTerminal, Trash2, Zap } from 'lucide-react';
 import { testNotification } from '../notify';
 import { useReactFlow } from '@xyflow/react';
 import { totalTokens, useApp } from '../store';
-import { loadWorkspace, saveWorkspace } from '../workspace';
-import { send } from '../engine';
+import { deleteWorkspace, loadWorkspace, newWorkspace, saveWorkspace } from '../workspace';
+import { inTauri, send } from '../engine';
+import { toggleTerminals } from '../terminal';
+import { requestFocus, startCompany, stopCompany, viewCenter } from '../actions';
 import { checkForUpdate, installUpdate, useUpdate } from '../updater';
 import { spring } from '../lib';
 
@@ -38,6 +40,9 @@ export function Toolbar() {
         </IconBtn>
         <IconBtn title="Settings" onClick={() => useApp.getState().set({ settingsOpen: true })}>
           <Gear size={15} />
+        </IconBtn>
+        <IconBtn title="Terminal (Ctrl+`)" onClick={toggleTerminals}>
+          <SquareTerminal size={15} />
         </IconBtn>
         <button
           title="Search and commands (Ctrl+F)"
@@ -108,6 +113,9 @@ export function WorkspacesSheet() {
         <button onClick={() => (saveWorkspace(name.trim() || current), setName(''))} className="shrink-0 rounded-[10px] bg-accent px-3 text-[12.5px] font-semibold text-white">
           Save as
         </button>
+        <button onClick={() => (newWorkspace(), close())} title="Close every session and start an empty workspace" className="flex shrink-0 items-center gap-1 rounded-[10px] border border-line px-3 text-[12.5px] text-ink-2 hover:border-line-hi hover:text-ink">
+          <Plus size={14} /> New
+        </button>
       </div>
       <div className="max-h-[50vh] space-y-1 overflow-y-auto">
         {items.length === 0 && <div className="py-6 text-center text-[12.5px] text-ink-3">No saved workspaces yet. The board also autosaves every few seconds.</div>}
@@ -115,7 +123,10 @@ export function WorkspacesSheet() {
           <div key={w.name} className="group flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-white/[0.04]">
             <FolderOpen size={15} className="text-ink-3" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px]">{w.name}</div>
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-[13px]">{w.name}</span>
+                {w.name === current && <span className="shrink-0 rounded-full bg-accent-soft px-1.5 text-[10.5px] text-accent-hi">open</span>}
+              </div>
               <div className="text-[11.5px] text-ink-3">
                 {w.sessions} session{w.sessions === 1 ? '' : 's'} · {new Date(w.savedAt).toLocaleString()}
               </div>
@@ -123,7 +134,7 @@ export function WorkspacesSheet() {
             <button onClick={() => (loadWorkspace(w.name), close())} className="rounded-lg px-2.5 py-1 text-[12px] text-ink-2 hover:bg-card-hi hover:text-ink">
               Open
             </button>
-            <button onClick={() => send({ t: 'workspace.delete', name: w.name })} className="rounded-lg p-1.5 text-ink-3 opacity-0 hover:text-st-error group-hover:opacity-100">
+            <button onClick={() => deleteWorkspace(w.name)} title={`Delete ${w.name}`} className="rounded-lg p-1.5 text-ink-3 transition hover:bg-white/[0.06] hover:text-st-error">
               <Trash2 size={14} />
             </button>
           </div>
@@ -136,6 +147,8 @@ export function WorkspacesSheet() {
 export function SettingsSheet() {
   const open = useApp((s) => s.settingsOpen);
   const settings = useApp((s) => s.settings);
+  const cruxHome = useApp((s) => s.cruxHome);
+  const agentCount = useApp((s) => s.agents.length);
   const [key, setKey] = useState('');
   const close = () => useApp.getState().set({ settingsOpen: false });
   if (!settings) return null;
@@ -177,6 +190,7 @@ export function SettingsSheet() {
           </button>
         </div>
       )}
+      <CompanyRow />
       <UpdateRow />
       <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-line bg-[#1a1a1a] px-3 py-2.5">
         <div className="min-w-0">
@@ -196,6 +210,11 @@ export function SettingsSheet() {
       <Num label="Times a session can be woken by messages per hour" value={settings.maxWakesPerHour} onChange={(v) => set({ maxWakesPerHour: v })} step={1} />
       <Num label="Sessions that can wake each other in a row" value={settings.maxWakeChain} onChange={(v) => set({ maxWakeChain: v })} step={1} />
       <Num label="Negotiation rounds before asking you" value={settings.maxNegotiationRounds} onChange={(v) => set({ maxNegotiationRounds: v })} step={1} />
+      <div className="mt-3">
+        <div className="mb-1.5 text-[12px] font-medium text-ink-2">Crux folder (optional)</div>
+        <input className="field font-mono !text-[12px]" placeholder={cruxHome || 'CRUX_HOME, else ~/.crux'} defaultValue={settings.cruxPath ?? ''} onBlur={(e) => set({ cruxPath: e.target.value.trim() || null })} />
+        <div className="mt-1.5 text-[11.5px] text-ink-3">{agentCount ? `${agentCount} agents found` : 'No agents found'} in {cruxHome || 'the Crux folder'}/agents</div>
+      </div>
       <div className="mt-3">
         <div className="mb-1.5 text-[12px] font-medium text-ink-2">Claude Code executable (optional)</div>
         <input className="field font-mono !text-[12px]" placeholder="Leave empty to use the bundled one" defaultValue={settings.claudePath ?? ''} onBlur={(e) => set({ claudePath: e.target.value.trim() || null })} />
@@ -247,6 +266,99 @@ function UpdateRow() {
         >
           Check for updates
         </button>
+      )}
+    </div>
+  );
+}
+
+/** Crux company mode for the open workspace: a coordinator session onboards the company and starts its teams. */
+function CompanyRow() {
+  const company = useApp((s) => s.company);
+  const workspace = useApp((s) => s.workspaceName);
+  const mock = useApp((s) => !!s.settings?.mock);
+  const coordinator = useApp((s) => (s.company?.coordinatorId ? s.sessions[s.company.coordinatorId] : undefined));
+  // A saved coordinator comes back stopped with a Resume button, so it still counts.
+  const dormant = useApp((s) => !!s.company?.coordinatorId && !!s.dormant[s.company.coordinatorId]);
+  const rf = useReactFlow();
+  const [enabling, setEnabling] = useState(false);
+  const [root, setRoot] = useState('');
+  const on = !!company || enabling;
+  const canStart = root.trim().length > 0 || mock;
+
+  const start = (folder: string) => {
+    startCompany(folder, viewCenter(rf));
+    setEnabling(false);
+    useApp.getState().set({ settingsOpen: false });
+  };
+  const browse = async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const dir = await open({ directory: true, multiple: false, defaultPath: root || undefined });
+    if (typeof dir === 'string') setRoot(dir);
+  };
+
+  return (
+    <div className="mb-4 rounded-xl border border-line bg-[#1a1a1a] px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[12.5px]">
+            <Building2 size={13} className="text-ink-3" /> Crux company mode
+          </div>
+          <div className="text-[11.5px] leading-snug text-ink-3">
+            Runs "{workspace}" as a Crux company. A coordinator session asks about the company, sets it up and starts a session per team.
+          </div>
+        </div>
+        <Switch
+          on={on}
+          onChange={(v) => {
+            if (v) setEnabling(true);
+            else if (company) stopCompany();
+            else setEnabling(false);
+          }}
+        />
+      </div>
+      {enabling && !company && (
+        <div className="mt-3">
+          <div className="mb-1.5 text-[12px] font-medium text-ink-2">Company folder</div>
+          <div className="flex gap-2">
+            <input
+              autoFocus
+              className="field font-mono !text-[12px]"
+              placeholder={mock ? 'Demo mode, any path works' : '/Users/you/acme/company'}
+              value={root}
+              onChange={(e) => setRoot(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && canStart && start(root.trim() || '/demo/company')}
+            />
+            {inTauri() && (
+              <button onClick={browse} className="shrink-0 rounded-[10px] border border-line px-3 text-ink-2 hover:border-line-hi hover:text-ink" title="Browse">
+                <FolderOpen size={16} />
+              </button>
+            )}
+          </div>
+          <div className="mt-1.5 text-[11.5px] leading-snug text-ink-3">Created if missing. Teams get their own folders beside it.</div>
+          <button
+            disabled={!canStart}
+            onClick={() => start(root.trim() || '/demo/company')}
+            className="mt-2.5 w-full rounded-[10px] bg-accent py-2 text-[12.5px] font-semibold text-white hover:bg-accent-hi disabled:opacity-40"
+          >
+            Start onboarding
+          </button>
+        </div>
+      )}
+      {company && (
+        <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-line pt-2.5">
+          <div className="min-w-0 truncate font-mono text-[11.5px] text-ink-2" title={company.root}>
+            {company.root}
+          </div>
+          {coordinator && (coordinator.status !== 'stopped' || dormant) ? (
+            <button onClick={() => (useApp.getState().set({ settingsOpen: false }), requestFocus(coordinator.id, true))} className="shrink-0 rounded-[9px] px-2 py-1 text-[11.5px] text-ink-2 hover:bg-white/[0.06] hover:text-ink">
+              Show coordinator
+            </button>
+          ) : (
+            <button onClick={() => start(company.root)} className="shrink-0 rounded-[9px] bg-accent px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-accent-hi">
+              Start coordinator
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

@@ -8,9 +8,12 @@ import type {
   EngineSettings,
   FeedItem,
   HubMessage,
+  MatrixOrigin,
+  MatrixStatus,
   PromptRequest,
   PromptResponse,
   SessionConfig,
+  SpawnRequest,
   SessionState,
   SessionStatus,
 } from './protocol.js';
@@ -24,8 +27,17 @@ export interface SessionHost {
   feedDelta(id: string, itemId: string, text: string): void;
   ask(p: PromptRequest): Promise<PromptResponse>;
   nameOf(id: string): string;
+  /** System prompt text for a Crux agent, or null if it doesn't exist. */
+  agentPrompt(agent: string): string | null;
+  /** System prompt text with the company coordinator's duties. */
+  coordinatorPrompt(): string;
+  /** Start a session for `parentId` (the coordinator). The user has already said yes. */
+  spawn(parentId: string, req: SpawnRequest): { ok: true; id: string; name: string } | { ok: false; error: string };
   /** Called after each finished turn so the engine can check the budget. */
   turnDone(id: string): void;
+  /** Post a turn's answer back into the Matrix thread it came from. */
+  matrixReply(id: string, origin: MatrixOrigin, text: string): void;
+  matrixTyping(id: string, roomId: string, on: boolean): void;
 }
 
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -35,7 +47,9 @@ export const newItemId = () => `i${Date.now().toString(36)}${(itemSeq++).toStrin
 
 export abstract class BaseSession {
   readonly state: SessionState;
-  protected queue: { text: string; depth: number }[] = [];
+  protected queue: { text: string; depth: number; origin?: MatrixOrigin }[] = [];
+  /** Set while a turn started by a Matrix message runs: its answer goes back there. */
+  private turnOrigin: MatrixOrigin | null = null;
   /** Hub wake depth of the turn running now. 0 = the user started it. */
   turnDepth = 0;
   /** Wait this long before a hub wake starts a turn, so messages that arrive together share one turn. */
@@ -48,6 +62,8 @@ export abstract class BaseSession {
   private pendingWake = false;
   protected closed = false;
   private stateTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The user picked "always" on a spawn prompt: start sessions without asking again. */
+  private spawnAlways = false;
 
   constructor(
     readonly id: string,
@@ -115,6 +131,53 @@ export abstract class BaseSession {
     this.publish();
   }
 
+  /** Crux text for the system prompt: the agent's AGENT.md and the coordinator's duties. Says in the feed what it applied. */
+  protected rolePrompt(): string | null {
+    const parts: string[] = [];
+    const agent = this.config.agent;
+    if (agent) {
+      const text = this.host.agentPrompt(agent);
+      this.feed('system', text ? `Running as Crux agent ${agent}` : `Crux agent ${agent} not found, running as plain Claude`);
+      if (text) parts.push(text);
+    }
+    if (this.config.coordinator) {
+      this.feed('system', 'Company coordinator: runs Crux onboarding and can start team sessions');
+      parts.push(this.host.coordinatorPrompt());
+    }
+    return parts.length ? parts.join('\n\n') : null;
+  }
+
+  /** hub_spawn: ask the user, then start the session. Returns the text the model sees. */
+  async spawnSession(req: SpawnRequest): Promise<string> {
+    if (!this.config.coordinator) return 'Only the company coordinator can start sessions.';
+    if (!this.spawnAlways) {
+      const prev = this.state.status;
+      this.setStatus('waiting', `Wants to start ${clip(req.name, 30)}`);
+      const res = await this.host.ask({
+        kind: 'tool',
+        requestId: newItemId(),
+        sessionId: this.id,
+        toolName: 'hub_spawn',
+        title: `${this.config.name} wants to start a session: ${req.name}`,
+        detail: [
+          `Folder: ${path.resolve(this.config.cwd, req.folder)} (created if missing)`,
+          req.agent && `Agent: ${req.agent}`,
+          req.family && `Family: ${req.family}`,
+          req.prompt && `First message: ${clip(req.prompt, 300)}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        canAlwaysAllow: true,
+      });
+      this.setStatus(prev === 'waiting' ? 'working' : prev, 'Got your answer');
+      if (res.kind !== 'tool' || res.decision === 'deny') return `The user said no to starting ${req.name}${res.kind === 'tool' && res.message ? `: ${res.message}` : '.'}`;
+      if (res.decision === 'always') this.spawnAlways = true;
+    }
+    const r = this.host.spawn(this.id, req);
+    if (!r.ok) return r.error;
+    return `Started ${r.name} (id ${r.id}). It is linked to you and can message you through the hub.`;
+  }
+
   /** User typed into the session. */
   send(text: string) {
     if (this.closed) return;
@@ -126,23 +189,50 @@ export abstract class BaseSession {
     this.queueTurn(pending ? `${pending}\n\n${text}` : text, 0);
   }
 
-  protected queueTurn(text: string, depth: number) {
-    if (this.busy) {
-      this.queue.push({ text, depth });
-      return;
-    }
-    this.startTurn(text, depth);
+  /** A Matrix message that mentions this session (or follows up in its thread). */
+  sendFromMatrix(text: string, origin: MatrixOrigin) {
+    if (this.closed) return;
+    this.feed('user', `[Matrix · ${origin.roomName}] ${origin.sender}: ${text}`);
+    if (!this.state.goal && this.config.awareness !== 'solo') this.setGoal(clip(text, 160));
+    const pending = this.busy ? null : this.takeNoticeText();
+    const msg = `[Matrix message from ${origin.sender} in ${origin.roomName}. Your final reply is posted to that thread.]\n${text}`;
+    this.queueTurn(pending ? `${pending}\n\n${msg}` : msg, 0, origin);
   }
 
-  private startTurn(text: string, depth: number) {
+  setMatrix(status: MatrixStatus) {
+    this.state.matrix = status;
+    this.publish();
+  }
+
+  protected queueTurn(text: string, depth: number, origin?: MatrixOrigin) {
+    if (this.busy) {
+      this.queue.push({ text, depth, origin });
+      return;
+    }
+    this.startTurn(text, depth, origin);
+  }
+
+  private startTurn(text: string, depth: number, origin?: MatrixOrigin) {
     this.busy = true;
     this.turnDepth = depth;
+    this.turnOrigin = origin ?? null;
+    if (origin) this.host.matrixTyping(this.id, origin.roomId, true);
     this.setStatus('thinking', 'Thinking');
     this.pushInput(text);
   }
 
-  /** The engine calls this when a turn finishes. */
-  protected onTurnEnd() {
+  /** Send the finished turn's answer to Matrix if the turn came from there. */
+  protected answerMatrix(reply: string | undefined) {
+    const origin = this.turnOrigin;
+    if (!origin) return;
+    this.turnOrigin = null;
+    this.host.matrixTyping(this.id, origin.roomId, false);
+    this.host.matrixReply(this.id, origin, reply?.trim() || 'Stopped before writing an answer.');
+  }
+
+  /** The engine calls this when a turn finishes. `reply` is its final text, for Matrix. */
+  protected onTurnEnd(reply?: string) {
+    this.answerMatrix(reply);
     this.busy = false;
     this.state.turns += 1;
     // Claims only live for the turn that made them, so nothing gets locked forever.
@@ -150,7 +240,7 @@ export abstract class BaseSession {
     this.host.turnDone(this.id);
     const next = this.queue.shift();
     if (next !== undefined) {
-      this.startTurn(next.text, next.depth);
+      this.startTurn(next.text, next.depth, next.origin);
       return;
     }
     if (this.pendingWake) {
@@ -292,7 +382,7 @@ export function sinnectPrompt(cfg: SessionConfig, roster: string): string {
   }
   return [
     `You are "${cfg.name}", one of several Claude sessions on a Sinnect canvas. Your priority is ${cfg.priority} (1 low, 5 high).`,
-    `Coordination tools (mcp__sinnect__*): hub_send (short message to another session), hub_roster, hub_set_status, hub_inbox, hub_claim / hub_release (optional, edits are claimed automatically), hub_negotiate (answer a file negotiation).`,
+    `Coordination tools (mcp__sinnect__*): hub_send (short message to another session), hub_roster, hub_set_status, hub_inbox, hub_claim / hub_release (optional, edits are claimed automatically), hub_negotiate (answer a file negotiation)${cfg.coordinator ? ', hub_spawn (start a new session on the canvas, the user approves each one)' : ''}.`,
     `Token rules, every hub message can cost the other session a full turn:`,
     `- Only message someone when it changes what they should do. Never send thanks, acks, "got it", "noted", or progress updates.`,
     `- A hub message does not need a reply unless it asks you a question. If you reply, put everything in one message.`,

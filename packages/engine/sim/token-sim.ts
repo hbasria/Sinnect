@@ -76,7 +76,7 @@ export async function simulate(label: string, extra: Partial<EngineSettings> = {
   const host: SessionHost = {
     hub, settings: () => settings, apiKey: () => null, state: () => {}, feedAdd: () => {}, feedDelta: () => {},
     ask: async () => ({ requestId: '', kind: 'tool', decision: 'deny' }),
-    nameOf: (id) => sessions.get(id)?.config.name ?? id, turnDone: () => {},
+    nameOf: (id) => sessions.get(id)?.config.name ?? id, agentPrompt: () => null, coordinatorPrompt: () => '', spawn: () => ({ ok: false, error: 'no spawning in the sim' }), turnDone: () => {}, matrixReply: () => {}, matrixTyping: () => {},
   };
   for (const name of ['Lead', 'UI', 'Engine', 'Reviewer']) {
     const cfg: SessionConfig = { name, cwd: '/tmp', model: 'opus', prompt: '', priority: 3, awareness: 'family', permission: 'auto', familyId: 'fam' };

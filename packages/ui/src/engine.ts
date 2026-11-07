@@ -46,7 +46,12 @@ function queueDelta(id: string, itemId: string, text: string) {
   }
 }
 
+let connecting = false;
+
 export async function connect() {
+  // One connection per page: a second one would get every message again.
+  if (connecting) return;
+  connecting = true;
   const info = await engineInfo();
   const open = () => {
     useApp.getState().set({ conn: 'connecting' });
@@ -88,3 +93,6 @@ export function onEngine(fn: (m: EngineMsg) => void) {
   listeners.add(fn);
   return () => listeners.delete(fn);
 }
+
+// The socket and listeners live in this module, so a hot update of it can't be patched in place.
+if (import.meta.hot) import.meta.hot.accept(() => location.reload());

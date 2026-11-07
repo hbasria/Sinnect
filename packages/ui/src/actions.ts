@@ -1,6 +1,7 @@
 // Board actions shared by the canvas, the command palette and notifications.
 
 import type { useReactFlow } from '@xyflow/react';
+import type { SessionConfig } from '@engine/protocol';
 import { useApp, type AppNode } from './store';
 import { send } from './engine';
 import { FAMILY_COLORS, uid } from './lib';
@@ -29,6 +30,48 @@ export function newFamily(pos: Pos) {
 export function newNote(pos: Pos) {
   const st = useApp.getState();
   st.set({ nodes: [...st.nodes, { id: uid('n'), type: 'note', position: { x: pos.x - 110, y: pos.y - 50 }, data: { text: '' } }] });
+}
+
+/** Company mode on: a coordinator session at the company root runs Crux onboarding and starts the teams. */
+export function startCompany(root: string, pos: Pos) {
+  const st = useApp.getState();
+  const id = uid('s');
+  const config: SessionConfig = {
+    name: 'Coordinator',
+    cwd: root,
+    model: st.settings?.defaultModel ?? 'claude-sonnet-5-5',
+    // The engine fills in the onboarding message.
+    prompt: '',
+    priority: 5,
+    awareness: 'everyone',
+    permission: 'ask',
+    familyId: null,
+    coordinator: true,
+  };
+  const node: AppNode = { id, type: 'session', position: { x: pos.x - CARD_W / 2, y: pos.y - CARD_H / 2 }, data: { sessionId: id } };
+  st.set({ nodes: [...st.nodes, node], company: { root, coordinatorId: id } });
+  send({ t: 'session.create', id, config });
+}
+
+/** Company mode off. Sessions and the company's files stay as they are. */
+export function stopCompany() {
+  useApp.getState().set({ company: null });
+}
+
+/** Put a session another one started (hub_spawn) in a row below its parent, in a frame for its family. */
+export function placeSpawned(id: string, parentId: string) {
+  const st = useApp.getState();
+  if (st.nodes.some((n) => n.id === id)) return;
+  const parent = st.nodes.find((n) => n.id === parentId);
+  const siblings = st.links.filter((l) => l.a === parentId && l.b !== id).length;
+  const base = parent?.position ?? { x: 0, y: 0 };
+  const position = { x: base.x + siblings * (CARD_W + 120), y: base.y + CARD_H + 200 };
+  const nodes: AppNode[] = [...st.nodes, { id, type: 'session', position, data: { sessionId: id } }];
+  const familyId = st.sessions[id]?.config.familyId;
+  if (familyId && !nodes.some((n) => n.type === 'family' && n.data.familyId === familyId)) {
+    nodes.unshift({ id: `fam-${familyId}`, type: 'family', position: { x: position.x - 40, y: position.y - 64 }, data: { familyId }, width: CARD_W + 80, height: CARD_H + 104, zIndex: -1 });
+  }
+  st.set({ nodes });
 }
 
 /** Glide the camera to a session, select it, and optionally open its details. */

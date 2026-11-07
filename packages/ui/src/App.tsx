@@ -15,10 +15,15 @@ import { useApp } from './store';
 import { connect, onEngine } from './engine';
 import { startAutosave } from './workspace';
 import { CommandPalette } from './panels/CommandPalette';
+import { MatrixDialog } from './panels/MatrixDialog';
+import { TerminalPanel } from './panels/TerminalPanel';
+import { toggleTerminals } from './terminal';
 import { startNotifications } from './notify';
-import { focusSession } from './actions';
+import { focusSession, placeSpawned } from './actions';
 
-let booted = false;
+// On the window, not in this module: a hot reload re-runs this file, and booting
+// again would open a second engine connection and show every message twice.
+const boot = window as { __sinnectBooted?: boolean };
 
 function Shell() {
   const expanded = useApp((s) => s.expanded);
@@ -26,13 +31,14 @@ function Shell() {
   const rf = useReactFlow();
 
   useEffect(() => {
-    if (booted) return;
-    booted = true;
+    if (boot.__sinnectBooted) return;
+    boot.__sinnectBooted = true;
     startAutosave();
     startUpdateChecks();
     connect();
     onEngine((m) => {
       if (m.t === 'toast') (m.level === 'error' ? toast.error : m.level === 'warn' ? toast.warning : toast)(m.text);
+      if (m.t === 'session.spawned') placeSpawned(m.id, m.parentId);
     });
     startNotifications();
     // Old message pulses are only for the animation; drop them.
@@ -55,6 +61,15 @@ function Shell() {
     };
     // Ctrl+F opens the command palette from anywhere, even while typing.
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+` shows or hides the terminal panel, like in VS Code.
+      if (e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'Backquote') {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleTerminals();
+        return;
+      }
+      // Inside a terminal Ctrl+F belongs to the shell (forward one character).
+      if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return;
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         const s = useApp.getState();
@@ -82,6 +97,8 @@ function Shell() {
       <UpdateCard />
       <WorkspacesSheet />
       <SettingsSheet />
+      <MatrixDialog />
+      <TerminalPanel />
       <CommandPalette />
       <Intro />
       <Toaster theme="dark" position="bottom-center" toastOptions={{ style: { background: '#1e1e1f', border: '1px solid #363638', color: '#ededec' } }} />

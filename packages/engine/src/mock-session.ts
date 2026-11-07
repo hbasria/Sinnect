@@ -12,16 +12,20 @@ const pick = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
 
 export class MockSession extends BaseSession {
   private run = 0;
+  /** Last streamed text, the turn's answer for Matrix. */
+  private lastText = '';
   private freed: (() => void) | null = null;
 
   start() {
     this.state.sdkSessionId = `mock-${this.id}`;
+    this.rolePrompt();
     if (this.config.prompt.trim()) this.send(this.config.prompt);
     else this.setStatus('idle', 'Waiting for you');
   }
 
   protected pushInput(text: string) {
     const run = ++this.run;
+    this.lastText = '';
     this.script(text, run).catch((e) => {
       this.feed('error', String(e), { isError: true });
       this.busy = false;
@@ -44,6 +48,7 @@ export class MockSession extends BaseSession {
   private async stream(text: string, run: number) {
     const item = this.feed('text', '');
     this.setStatus('working', 'Writing a reply');
+    this.lastText = text;
     const words = text.split(/(\s+)/);
     for (const w of words) {
       if (!this.alive(run)) return;
@@ -145,6 +150,12 @@ export class MockSession extends BaseSession {
       return;
     }
 
+    if (this.config.coordinator && this.state.turns === 0) {
+      await this.onboard(run);
+      this.finish(run);
+      return;
+    }
+
     const topic = prompt.length > 60 ? prompt.slice(0, 57) + '…' : prompt;
     await this.stream(`On it. I'll start by looking around the project, then work on: ${topic}`, run);
     if (this.config.awareness !== 'solo') {
@@ -213,10 +224,50 @@ export class MockSession extends BaseSession {
     this.finish(run);
   }
 
+  /** Demo company onboarding: ask what the company is and which units it needs, then start one session per unit. */
+  private async onboard(run: number) {
+    await this.stream("Let's set up your company. I'll ask a couple of questions, then start a session for each team.", run);
+    const ask = async (question: string, header: string, options: { label: string; description?: string }[], multiSelect = false) => {
+      this.setStatus('waiting', 'Asking you something');
+      this.feed('tool', 'Asking you something', { toolName: 'AskUserQuestion' });
+      const res = await this.host.ask({ kind: 'question', requestId: newItemId(), sessionId: this.id, questions: [{ question, header, multiSelect, options }] });
+      this.setStatus('working', 'Got your answer');
+      return res.kind === 'question' && !res.skipped ? Object.values(res.answers)[0] ?? '' : '';
+    };
+    const what = await ask('What is the company and what does it do?', 'Company', [
+      { label: 'A software studio', description: 'Builds apps for clients' },
+      { label: 'An online shop', description: 'Sells products on the web' },
+    ]);
+    if (!this.alive(run)) return;
+    const units = await ask(`Which units should ${what || 'the company'} have?`, 'Units', [
+      { label: 'Software', description: 'backend-developer' },
+      { label: 'Finance', description: 'ledger-finance-manager' },
+      { label: 'Operations', description: 'team-operations-coach' },
+      { label: 'Security', description: 'ciso-advisor' },
+    ], true);
+    if (!this.alive(run)) return;
+    const roles: Record<string, string> = { software: 'backend-developer', finance: 'ledger-finance-manager', operations: 'team-operations-coach', security: 'ciso-advisor' };
+    const picked = units.split(',').map((u) => u.trim()).filter(Boolean);
+    if (!picked.length) {
+      await this.stream('No units yet. Tell me when you know which teams you need.', run);
+      return;
+    }
+    for (const unit of picked) {
+      if (!this.alive(run)) return;
+      const team = unit.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const req = { name: team, folder: `../${team}`, agent: roles[team] ?? null, family: team, prompt: `Boot as Crux team demo/${team}, give your boot report, then wait.` };
+      const toolUseId = newItemId();
+      this.feed('tool', `Starting ${team}`, { toolName: 'mcp__sinnect__hub_spawn', toolUseId, input: req });
+      this.feed('tool_result', await this.spawnSession(req), { toolUseId });
+      this.tokens(300, 60);
+    }
+    await this.stream(`Your teams are up: ${picked.join(', ')}. I'll stay here as the coordinator and route work between them.`, run);
+  }
+
   private finish(run: number) {
     if (!this.alive(run)) return;
     this.feed('result', 'Done');
-    this.onTurnEnd();
+    this.onTurnEnd(this.lastText);
   }
 
   async interrupt() {

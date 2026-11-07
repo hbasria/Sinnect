@@ -19,6 +19,7 @@ const schema = z.object({
   familyId: z.string().nullable(),
   familyName: z.string().nullable(),
   prompt: z.string().max(MAX_PROMPT),
+  agent: z.string().nullable().optional(),
   createdAt: z.number(),
 });
 

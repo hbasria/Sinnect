@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useReactFlow } from '@xyflow/react';
 import { toast } from 'sonner';
-import { Bell, BellOff, Bot, Boxes, CornerDownLeft, Download, FolderOpen, KeyRound, Layers, Maximize, Save, Search, Settings as Gear, StickyNote, User } from 'lucide-react';
+import { Bell, BellOff, Bot, Boxes, CornerDownLeft, Download, FolderOpen, KeyRound, Layers, Maximize, Save, Search, Settings as Gear, SquareTerminal, StickyNote, User } from 'lucide-react';
 import type { SessionState } from '@engine/protocol';
 import { isActive, totalTokens, useApp } from '../store';
 import { send } from '../engine';
@@ -10,6 +10,7 @@ import { STATUS, compact, modelLabel, shortPath } from '../lib';
 import { focusSession, newFamily, newNote, openSetup, viewCenter } from '../actions';
 import { loadWorkspace, saveWorkspace } from '../workspace';
 import { checkForUpdate } from '../updater';
+import { openTerminal, toggleTerminals } from '../terminal';
 import { spawnFromTemplate, templateFamily } from '../templates';
 
 type Group = 'Sessions' | 'Templates' | 'Actions' | 'Workspaces' | 'Settings';
@@ -142,6 +143,8 @@ function Palette() {
     list.push(
       { key: 'a:new', group: 'Actions', label: 'New session', words: 'spawn start create add claude', icon: <Bot size={15} />, hint: 'Tab', run: after(() => openSetup(viewCenter(rf))) },
       { key: 'a:family', group: 'Actions', label: 'New family', words: 'group frame topic', icon: <Boxes size={15} />, run: after(() => newFamily(viewCenter(rf))) },
+      { key: 'a:term', group: 'Actions', label: 'New terminal', words: 'shell console bash zsh command line', icon: <SquareTerminal size={15} />, run: after(() => openTerminal()) },
+      { key: 'a:termtoggle', group: 'Actions', label: 'Show or hide terminals', words: 'shell console panel', icon: <SquareTerminal size={15} />, hint: 'Ctrl `', run: after(toggleTerminals) },
       { key: 'a:note', group: 'Actions', label: 'Sticky note', words: 'note text comment', icon: <StickyNote size={15} />, run: after(() => newNote(viewCenter(rf))) },
       { key: 'a:fit', group: 'Actions', label: 'Show the whole board', words: 'fit view zoom out overview', icon: <Maximize size={15} />, run: after(() => rf.fitView({ padding: 0.25, duration: 600 })) },
       {

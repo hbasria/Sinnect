@@ -19,8 +19,8 @@ export function loadLastSetup(): Partial<SessionConfig> {
   }
 }
 
-export function rememberSetup(c: Pick<SessionConfig, 'cwd' | 'model' | 'awareness' | 'permission'>) {
-  localStorage.setItem(LAST_SETUP, JSON.stringify({ cwd: c.cwd, model: c.model, awareness: c.awareness, permission: c.permission }));
+export function rememberSetup(c: Pick<SessionConfig, 'cwd' | 'model' | 'awareness' | 'permission' | 'agent'>) {
+  localStorage.setItem(LAST_SETUP, JSON.stringify({ cwd: c.cwd, model: c.model, awareness: c.awareness, permission: c.permission, agent: c.agent ?? null }));
 }
 
 /** Template spawns only remember the folder, never the template's model or permissions as new defaults. */
@@ -68,6 +68,7 @@ export function spawnFromTemplate(t: SessionTemplate, center: { x: number; y: nu
     awareness: t.awareness,
     permission: t.permission,
     familyId: templateFamily(t, st.families),
+    agent: t.agent ?? null,
   };
   rememberFolder(cwd);
   const node: AppNode = { id, type: 'session', position: freePosition({ x: center.x - CARD_W / 2, y: center.y - CARD_H / 2 }), data: { sessionId: id } };

@@ -17,6 +17,57 @@ export interface SessionConfig {
   familyId?: string | null;
   /** SDK session id to resume instead of starting fresh. */
   resumeId?: string | null;
+  /** Crux agent id. Its AGENT.md is added to the system prompt. */
+  agent?: string | null;
+  /** Crux company coordinator: runs company onboarding and may start team sessions (hub_spawn). */
+  coordinator?: boolean;
+  /** Matrix chat for this session. The access token is kept by the engine, never here. */
+  matrix?: MatrixConfig | null;
+}
+
+export interface MatrixConfig {
+  homeserver: string;
+  /** The session's own Matrix account, known once the token has been checked. */
+  userId: string | null;
+  enabled: boolean;
+  /** Who may talk to the session. Key '*' = every room, else a room id. */
+  allowed: Record<string, string[]>;
+}
+
+export interface MatrixStatus {
+  state: 'off' | 'connecting' | 'online' | 'error';
+  userId: string | null;
+  error?: string;
+  /** Rooms the account has joined. */
+  rooms: { id: string; name: string }[];
+}
+
+/** Where a Matrix message came from, so the reply can go back into its thread. */
+export interface MatrixOrigin {
+  roomId: string;
+  roomName: string;
+  eventId: string;
+  threadRoot: string;
+  sender: string;
+}
+
+/** A session the coordinator wants to start, from its hub_spawn call. */
+export interface SpawnRequest {
+  name: string;
+  /** Working folder, relative to the coordinator's folder or absolute. Created if missing. */
+  folder: string;
+  agent?: string | null;
+  /** Family name; created if no family has it yet. */
+  family?: string | null;
+  prompt?: string | null;
+}
+
+/** A Crux agent definition a session can run as. */
+export interface CruxAgent {
+  id: string;
+  name: string;
+  description: string;
+  emoji: string;
 }
 
 export type SessionStatus =
@@ -51,6 +102,7 @@ export interface SessionState {
   turns: number;
   startedAt: number;
   error?: string;
+  matrix?: MatrixStatus;
 }
 
 export type FeedKind =
@@ -167,6 +219,8 @@ export interface EngineSettings {
   signedIn: boolean;
   /** Windows notifications when a session finishes or needs you while Sinnect is in the background. */
   notify: boolean;
+  /** Crux framework folder to read agents from. null = CRUX_HOME, else ~/.crux. */
+  cruxPath: string | null;
 }
 
 /** A saved new-session setup. Spawning from it reuses everything except the folder. */
@@ -182,6 +236,8 @@ export interface SessionTemplate {
   familyName: string | null;
   /** First message sent to the session. */
   prompt: string;
+  /** Crux agent id the session runs as. */
+  agent?: string | null;
   createdAt: number;
 }
 
@@ -195,6 +251,26 @@ export interface Snapshot {
   messages: HubMessage[];
   settings: EngineSettings;
   templates: SessionTemplate[];
+  agents: CruxAgent[];
+  /** The Crux folder the agents were read from. */
+  cruxHome: string;
+  terminals: TerminalSnapshot[];
+  /** Why terminals can't be used here (node-pty missing, turned off), or null. */
+  terminalsUnavailable: string | null;
+}
+
+/** A shell the engine runs in a folder, shown in the UI's terminal panel. */
+export interface TerminalInfo {
+  id: string;
+  cwd: string;
+  title: string;
+  alive: boolean;
+  exitCode?: number;
+}
+
+/** A terminal with its recent output, so a (re)connecting UI can redraw it. */
+export interface TerminalSnapshot extends TerminalInfo {
+  buffer: string;
 }
 
 // ---- UI -> engine ----
@@ -219,7 +295,17 @@ export type ClientMsg =
   | { t: 'workspace.delete'; name: string }
   /** Create or overwrite (same id) a template. */
   | { t: 'template.save'; template: SessionTemplate }
-  | { t: 'template.delete'; id: string };
+  | { t: 'template.delete'; id: string }
+  /** Connect the session to Matrix. No token = reuse the one saved for its account. */
+  | { t: 'matrix.enable'; id: string; homeserver: string; token?: string; allowed: Record<string, string[]> }
+  | { t: 'matrix.disable'; id: string }
+  /** Change who may talk to the session, without reconnecting. */
+  | { t: 'matrix.allow'; id: string; allowed: Record<string, string[]> }
+  /** Start a shell in `cwd`. The UI picks the id. */
+  | { t: 'term.open'; id: string; cwd: string; cols: number; rows: number; title?: string }
+  | { t: 'term.input'; id: string; data: string }
+  | { t: 'term.resize'; id: string; cols: number; rows: number }
+  | { t: 'term.close'; id: string };
 
 // ---- engine -> UI ----
 export type EngineMsg =
@@ -239,13 +325,23 @@ export type EngineMsg =
   | { t: 'workspace.list'; items: WorkspaceInfo[] }
   | { t: 'workspace.data'; name: string; data: unknown }
   /** Full template list, sent after every save/delete. */
-  | { t: 'templates'; templates: SessionTemplate[] };
+  | { t: 'templates'; templates: SessionTemplate[] }
+  /** Crux agent list, sent when the Crux folder changes. */
+  | { t: 'agents'; agents: CruxAgent[]; cruxHome: string }
+  /** A session started a new one (hub_spawn). Sent after its first session.state, so the UI can place it. */
+  | { t: 'session.spawned'; id: string; parentId: string }
+  | { t: 'term.opened'; terminal: TerminalInfo }
+  | { t: 'term.data'; id: string; data: string }
+  | { t: 'term.exit'; id: string; exitCode: number }
+  | { t: 'term.closed'; id: string };
 
 export interface WorkspaceInfo {
   name: string;
   savedAt: number;
   sessions: number;
 }
+
+export const FAMILY_COLORS = ['#ff6b4a', '#2dd4bf', '#fbbf24', '#7dd3fc', '#f472b6', '#a3e635', '#fb923c', '#e2e8f0'];
 
 export const DEFAULT_MODELS = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5' },

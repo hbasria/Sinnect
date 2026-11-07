@@ -11,7 +11,7 @@ export const STATUS: Record<SessionStatus, { label: string; color: string }> = {
   error: { label: 'Error', color: 'var(--color-st-error)' },
 };
 
-export const FAMILY_COLORS = ['#ff6b4a', '#2dd4bf', '#fbbf24', '#7dd3fc', '#f472b6', '#a3e635', '#fb923c', '#e2e8f0'];
+export { FAMILY_COLORS } from '@engine/protocol';
 
 export const uid = (p = 's') => `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 

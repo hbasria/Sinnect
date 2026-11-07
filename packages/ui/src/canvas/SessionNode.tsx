@@ -3,7 +3,8 @@ import { Handle, Position, useStore, type NodeProps } from '@xyflow/react';
 import { Cost } from '../components/Cost';
 import { AnimatePresence, motion } from 'motion/react';
 import NumberFlow from '@number-flow/react';
-import { Eye, EyeOff, Users, FileLock2, MessageSquare, Play, ShieldCheck, ShieldAlert, Zap } from 'lucide-react';
+import { Eye, EyeOff, Users, FileLock2, MessageSquare, MessagesSquare, Play, ShieldCheck, ShieldAlert, SquareTerminal, Zap } from 'lucide-react';
+import { openTerminal } from '../terminal';
 import { isActive, totalTokens, useApp, type AppNode, type SessionNodeData } from '../store';
 import { STATUS, modelLabel } from '../lib';
 import { send } from '../engine';
@@ -42,6 +43,9 @@ export const SessionNode = memo(function SessionNode({ id, data, selected }: Nod
   const claims = useApp((s) => s.claims.filter((c) => c.sessionId === data.sessionId).length);
   const unread = useApp((s) => s.messages.filter((m) => m.to === data.sessionId && m.from !== 'hub' && Date.now() - m.ts < 60_000).length);
   const family = useApp((s) => s.families.find((f) => f.id === st?.config.familyId));
+  // Select the stored object only: a fresh fallback object here would re-render forever.
+  const known = useApp((s) => s.agents.find((a) => a.id === st?.config.agent));
+  const agent = st?.config.agent ? known ?? { name: st.config.agent, emoji: '' } : null;
   const expanded = useApp((s) => s.expanded === data.sessionId);
   const zoom = useStore(zoomSel);
   const ref = useRef<HTMLDivElement>(null);
@@ -108,15 +112,31 @@ export const SessionNode = memo(function SessionNode({ id, data, selected }: Nod
             <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-3">
               <span style={{ color }}>{dormant ? 'Saved' : STATUS[status].label}</span>
               <span>·</span>
-              <span>{modelLabel(st.config.model)}</span>
+              <span className="whitespace-nowrap">{modelLabel(st.config.model)}</span>
+              {agent && (
+                <>
+                  <span>·</span>
+                  {/* The card name usually is the agent's name already, so the emoji is enough here. */}
+                  <span className="min-w-0 truncate" title={`Crux agent: ${agent.name}`}>
+                    {agent.emoji || agent.name}
+                  </span>
+                </>
+              )}
             </div>
           </div>
-          <button
-            onClick={open}
-            className="nodrag rounded-lg px-2 py-1 text-[11px] text-ink-2 opacity-0 transition hover:bg-card-hi hover:text-ink group-hover:opacity-100"
-          >
-            Open
-          </button>
+          {/* Floats over the corner on hover, so the name keeps its full width the rest of the time. */}
+          <div className="pointer-events-none absolute right-3 top-3.5 flex items-center gap-0.5 rounded-lg bg-card opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-100">
+            <button
+              onClick={(e) => (e.stopPropagation(), openTerminal(st.config.cwd, st.config.name))}
+              title={`Terminal in ${st.config.cwd}`}
+              className="nodrag rounded-lg p-1.5 text-ink-2 hover:bg-card-hi hover:text-ink"
+            >
+              <SquareTerminal size={13} />
+            </button>
+            <button onClick={open} className="nodrag rounded-lg px-2 py-1 text-[11px] text-ink-2 hover:bg-card-hi hover:text-ink">
+              Open
+            </button>
+          </div>
         </div>
 
         <div className="h-[38px] px-4">
@@ -155,6 +175,14 @@ export const SessionNode = memo(function SessionNode({ id, data, selected }: Nod
                 </motion.span>
               )}
             </AnimatePresence>
+            {st.matrix && st.matrix.state !== 'off' && (
+              <span
+                className={st.matrix.state === 'online' ? 'text-st-idle' : st.matrix.state === 'error' ? 'text-st-error' : 'text-st-thinking'}
+                title={st.matrix.state === 'online' ? `Matrix: listening as ${st.matrix.userId}` : `Matrix: ${st.matrix.error ?? st.matrix.state}`}
+              >
+                <MessagesSquare size={12} />
+              </span>
+            )}
             <span title={`Awareness: ${st.config.awareness}`}>
               {st.config.awareness === 'solo' ? <EyeOff size={12} /> : st.config.awareness === 'family' ? <Users size={12} /> : <Eye size={12} />}
             </span>

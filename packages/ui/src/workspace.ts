@@ -1,7 +1,9 @@
 // Saving and loading the whole board.
 
 import type { SessionState } from '@engine/protocol';
-import { useApp, type AppNode } from './store';
+import { useApp, type AppNode, type CompanyMode, type TermTab } from './store';
+import { closeAllTerminals } from './terminal';
+import { toast } from 'sonner';
 import { onEngine, send } from './engine';
 
 export interface WorkspaceFile {
@@ -11,6 +13,9 @@ export interface WorkspaceFile {
   links: ReturnType<typeof useApp.getState>['links'];
   families: ReturnType<typeof useApp.getState>['families'];
   viewport: ReturnType<typeof useApp.getState>['viewport'];
+  company?: CompanyMode | null;
+  /** Terminal tabs. The shells themselves don't survive; tabs come back and start fresh when shown. */
+  terminals?: Pick<TermTab, 'id' | 'cwd' | 'title'>[];
 }
 
 export function serialize(): WorkspaceFile {
@@ -31,6 +36,8 @@ export function serialize(): WorkspaceFile {
     links: s.links,
     families: s.families,
     viewport: s.viewport,
+    company: s.company,
+    terminals: s.terminals.map(({ id, cwd, title }) => ({ id, cwd, title })),
   };
 }
 
@@ -52,7 +59,11 @@ export function applyWorkspace(w: WorkspaceFile, name?: string) {
     } as SessionState;
     dormant[x.id] = true;
   }
-  s.set({ nodes: w.nodes, sessions, dormant, viewport: w.viewport, workspaceName: name ?? s.workspaceName });
+  // A tab whose shell is still running in the engine (the UI was reloaded) stays live.
+  const live = new Map(s.terminals.map((t) => [t.id, t]));
+  const saved: TermTab[] = (w.terminals ?? []).map((t) => live.get(t.id) ?? { ...t, status: 'dormant' });
+  const terminals = [...saved, ...s.terminals.filter((t) => !saved.some((x) => x.id === t.id))];
+  s.set({ nodes: w.nodes, sessions, dormant, viewport: w.viewport, workspaceName: name ?? s.workspaceName, company: w.company ?? null, terminals, termActive: s.termActive ?? terminals[0]?.id ?? null });
   send({ t: 'links.set', links: w.links });
   send({ t: 'families.set', families: w.families });
   window.dispatchEvent(new CustomEvent('sinnect:viewport', { detail: w.viewport }));
@@ -67,9 +78,41 @@ export async function loadWorkspace(name: string) {
   const s = useApp.getState();
   const running = Object.values(s.sessions).filter((x) => !s.dormant[x.id] && x.status !== 'stopped');
   if (running.length && !confirm(`Stop ${running.length} running session(s) and open "${name}"?`)) return;
-  for (const x of Object.values(s.sessions)) if (!s.dormant[x.id]) send({ t: 'session.remove', id: x.id });
-  s.set({ sessions: {}, dormant: {}, nodes: [], feeds: {} });
+  clearBoard();
   send({ t: 'workspace.load', name });
+}
+
+/** Close every session and empty the canvas: cards, links, families, company mode. */
+function clearBoard() {
+  const s = useApp.getState();
+  for (const x of Object.values(s.sessions)) if (!s.dormant[x.id]) send({ t: 'session.remove', id: x.id });
+  s.set({ sessions: {}, dormant: {}, nodes: [], feeds: {}, company: null, expanded: null });
+  closeAllTerminals();
+  send({ t: 'links.set', links: [] });
+  send({ t: 'families.set', families: [] });
+}
+
+const sessionCount = () => Object.keys(useApp.getState().sessions).length;
+
+/** Start over on an empty, unsaved board. */
+export function newWorkspace() {
+  const n = sessionCount();
+  if (n && !confirm(`Close ${n} session(s) and start an empty workspace? Unsaved changes are lost.`)) return;
+  clearBoard();
+  useApp.getState().set({ workspaceName: 'My workspace' });
+}
+
+/** Delete a saved workspace. Deleting the open one also closes its sessions and empties the board. */
+export function deleteWorkspace(name: string) {
+  const open = useApp.getState().workspaceName === name;
+  const n = open ? sessionCount() : 0;
+  const ask = n ? `Delete "${name}" and close its ${n} session(s)? This can't be undone.` : `Delete the saved workspace "${name}"? This can't be undone.`;
+  if (!confirm(ask)) return;
+  send({ t: 'workspace.delete', name });
+  if (!open) return;
+  clearBoard();
+  useApp.getState().set({ workspaceName: 'My workspace' });
+  toast(`Deleted "${name}"`);
 }
 
 let restoreTried = false;

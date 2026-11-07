@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Edge, Node, Viewport } from '@xyflow/react';
 import type {
   Claim,
+  CruxAgent,
   EngineMsg,
   EngineSettings,
   Family,
@@ -11,6 +12,7 @@ import type {
   PromptRequest,
   SessionState,
   SessionTemplate,
+  TerminalSnapshot,
   WorkspaceInfo,
 } from '@engine/protocol';
 
@@ -30,6 +32,21 @@ export type AppNode =
   | Node<SessionNodeData, 'session'>
   | Node<FamilyNodeData, 'family'>
   | Node<NoteNodeData, 'note'>;
+
+/** Crux company mode of this workspace: the company root and the coordinator session running it. */
+export interface CompanyMode {
+  root: string;
+  coordinatorId: string | null;
+}
+
+/** A tab in the terminal panel. "dormant" = no shell yet (new, or restored from a workspace); it starts when shown. */
+export interface TermTab {
+  id: string;
+  cwd: string;
+  title: string;
+  status: 'dormant' | 'running' | 'exited';
+  exitCode?: number;
+}
 
 export interface Pulse {
   id: string;
@@ -54,6 +71,14 @@ export interface UiState {
   workspaces: WorkspaceInfo[];
   workspaceName: string;
   templates: SessionTemplate[];
+  agents: CruxAgent[];
+  /** The Crux folder the engine read agents from. */
+  cruxHome: string;
+  company: CompanyMode | null;
+  terminals: TermTab[];
+  termActive: string | null;
+  termOpen: boolean;
+  terminalsUnavailable: string | null;
 
   nodes: AppNode[];
   viewport: Viewport | null;
@@ -65,12 +90,27 @@ export interface UiState {
   settingsOpen: boolean;
   workspacesOpen: boolean;
   paletteOpen: boolean;
+  /** Session whose Matrix chat dialog is open. */
+  matrixFor: string | null;
 
   apply(msg: EngineMsg): void;
   set(p: Partial<UiState>): void;
 }
 
 const MAX_FEED = 1500;
+
+/** Tabs after a (re)connect: the engine's shells win; a tab whose shell the engine no longer has starts again when shown. */
+function mergeTerminals(tabs: TermTab[], live: TerminalSnapshot[]): TermTab[] {
+  const byId = new Map(live.map((t) => [t.id, t]));
+  const out = tabs.map((tab) => {
+    const t = byId.get(tab.id);
+    byId.delete(tab.id);
+    if (!t) return tab.status === 'dormant' ? tab : { ...tab, status: 'dormant' as const, exitCode: undefined };
+    return { ...tab, cwd: t.cwd, status: t.alive ? ('running' as const) : ('exited' as const), exitCode: t.exitCode };
+  });
+  for (const t of byId.values()) out.push({ id: t.id, cwd: t.cwd, title: t.title, status: t.alive ? 'running' : 'exited', exitCode: t.exitCode });
+  return out;
+}
 
 export const useApp = create<UiState>((set, get) => ({
   conn: 'connecting',
@@ -87,6 +127,13 @@ export const useApp = create<UiState>((set, get) => ({
   workspaces: [],
   workspaceName: 'My workspace',
   templates: [],
+  agents: [],
+  cruxHome: '',
+  company: null,
+  terminals: [],
+  termActive: null,
+  termOpen: false,
+  terminalsUnavailable: null,
   nodes: [],
   viewport: null,
   expanded: null,
@@ -95,6 +142,7 @@ export const useApp = create<UiState>((set, get) => ({
   settingsOpen: false,
   workspacesOpen: false,
   paletteOpen: false,
+  matrixFor: null,
 
   set: (p) => set(p),
 
@@ -118,6 +166,10 @@ export const useApp = create<UiState>((set, get) => ({
           prompts: snap.prompts,
           messages: snap.messages,
           templates: snap.templates ?? s.templates,
+          agents: snap.agents ?? s.agents,
+          cruxHome: snap.cruxHome ?? s.cruxHome,
+          terminals: mergeTerminals(s.terminals, snap.terminals ?? []),
+          terminalsUnavailable: snap.terminalsUnavailable ?? null,
         });
         // Engine knows sessions the canvas has no node for (e.g. after a UI reload): place them.
         const have = new Set(get().nodes.filter((n) => n.type === 'session').map((n) => n.id));
@@ -190,6 +242,24 @@ export const useApp = create<UiState>((set, get) => ({
         return;
       case 'templates':
         set({ templates: msg.templates });
+        return;
+      case 'term.opened': {
+        const t = msg.terminal;
+        const tab: TermTab = { id: t.id, cwd: t.cwd, title: t.title, status: 'running' };
+        const known = s.terminals.some((x) => x.id === t.id);
+        set({ terminals: known ? s.terminals.map((x) => (x.id === t.id ? { ...x, cwd: t.cwd, title: t.title, status: 'running' } : x)) : [...s.terminals, tab] });
+        return;
+      }
+      case 'term.exit':
+        set({ terminals: s.terminals.map((x) => (x.id === msg.id ? { ...x, status: 'exited', exitCode: msg.exitCode } : x)) });
+        return;
+      case 'term.closed': {
+        const terminals = s.terminals.filter((x) => x.id !== msg.id);
+        set({ terminals, termActive: s.termActive === msg.id ? (terminals.at(-1)?.id ?? null) : s.termActive });
+        return;
+      }
+      case 'agents':
+        set({ agents: msg.agents, cruxHome: msg.cruxHome });
         return;
       case 'workspace.list':
         set({ workspaces: msg.items });

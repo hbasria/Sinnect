@@ -18,14 +18,18 @@ export function SetupCard() {
   const families = useApp((s) => s.families);
   const settings = useApp((s) => s.settings);
   const templates = useApp((s) => s.templates);
+  const agents = useApp((s) => s.agents);
   const count = useApp((s) => Object.keys(s.sessions).length);
   const last = useRef(loadLastSetup()).current;
   const t0 = setup.template;
 
-  const [name, setName] = useState(t0?.name ?? `Session ${count + 1}`);
+  // Template's agent, else the last one used. One that no longer exists falls back to none.
+  const agent0 = useRef(agents.find((a) => a.id === (t0 ? t0.agent : last.agent)) ?? null).current;
+  const [name, setName] = useState(t0?.name ?? agent0?.name ?? `Session ${count + 1}`);
   const [cwd, setCwd] = useState(last.cwd ?? '');
   const [model, setModel] = useState(t0?.model ?? last.model ?? settings?.defaultModel ?? DEFAULT_MODELS[1].id);
   const [prompt, setPrompt] = useState(t0?.prompt ?? '');
+  const [agent, setAgent] = useState<string | null>(agent0?.id ?? null);
   const [priority, setPriority] = useState(t0?.priority ?? 3);
   const [awareness, setAwareness] = useState<Awareness>(t0?.awareness ?? last.awareness ?? 'family');
   const [permission, setPermission] = useState<PermissionChoice>(t0?.permission ?? last.permission ?? 'ask');
@@ -52,6 +56,7 @@ export function SetupCard() {
   };
 
   const canStart = cwd.trim().length > 0 || settings?.mock;
+  const agentInfo = agents.find((a) => a.id === agent);
 
   const start = () => {
     if (!canStart) return;
@@ -65,6 +70,7 @@ export function SetupCard() {
       awareness,
       permission,
       familyId,
+      agent,
     };
     rememberSetup(config);
     const st = useApp.getState();
@@ -76,7 +82,7 @@ export function SetupCard() {
   // ---- templates ----
   const resolved = (t: SessionTemplate) => templateFamily(t, families);
   const matches = (t: SessionTemplate) =>
-    t.model === model && t.priority === priority && t.awareness === awareness && t.permission === permission && t.prompt.trim() === prompt.trim() && resolved(t) === familyId;
+    t.model === model && t.priority === priority && t.awareness === awareness && t.permission === permission && t.prompt.trim() === prompt.trim() && (t.agent ?? null) === agent && resolved(t) === familyId;
   // Two templates can hold the same setup: prefer the one last picked or saved.
   const current = templates.find((t) => t.id === picked && matches(t)) ?? templates.find(matches);
 
@@ -88,6 +94,7 @@ export function SetupCard() {
     setPermission(t.permission);
     setFamilyId(resolved(t));
     setPrompt(t.prompt);
+    setAgent(t.agent && agents.some((a) => a.id === t.agent) ? t.agent : null);
     setPicked(t.id);
     setFlash((n) => n + 1);
   };
@@ -123,6 +130,7 @@ export function SetupCard() {
       familyId,
       familyName: families.find((f) => f.id === familyId)?.name ?? null,
       prompt: prompt.trim(),
+      agent,
       createdAt: same?.createdAt ?? Date.now(),
     });
   };
@@ -218,8 +226,31 @@ export function SetupCard() {
           </div>
         </Field>
 
-        <Field label="First message" className="mt-3">
-          <textarea ref={promptRef} className="field h-24" placeholder="What should this session work on?" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        <Field label="Agent" hint={agents.length ? 'Runs the session as a Crux role' : 'No Crux agents found, set the folder in Settings'} className="mt-3">
+          <select
+            className="field"
+            value={agent ?? ''}
+            disabled={!agents.length}
+            onChange={(e) => {
+              const next = agents.find((a) => a.id === e.target.value) ?? null;
+              setAgent(next?.id ?? null);
+              // A default name follows the agent, a name the user typed stays.
+              if (next && (/^Session \d+$/.test(name.trim()) || agents.some((a) => a.name === name.trim()))) setName(next.name);
+            }}
+          >
+            <option value="">No agent, plain Claude</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.emoji ? `${a.emoji} ` : ''}
+                {a.name}
+              </option>
+            ))}
+          </select>
+          {agentInfo?.description && <div className="mt-1.5 line-clamp-2 text-[11.5px] leading-snug text-ink-3">{agentInfo.description}</div>}
+        </Field>
+
+        <Field label="First message" hint="Optional" className="mt-3">
+          <textarea ref={promptRef} className="field h-16" placeholder="What should this session work on?" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
         </Field>
 
         <Field label="Priority" hint="Higher wins when two sessions want the same file" className="mt-4">
@@ -308,8 +339,10 @@ export function SetupCard() {
 }
 
 function TemplateChip({ t, on, onApply, onSpawn, onDelete }: { t: SessionTemplate; on: boolean; onApply: () => void; onSpawn: () => void; onDelete: () => void }) {
+  const agentName = useApp((s) => s.agents.find((a) => a.id === t.agent)?.name ?? t.agent);
   const tip = [
     modelLabel(t.model),
+    agentName && `Agent: ${agentName}`,
     `Priority ${t.priority}`,
     PERM_SHORT[t.permission],
     t.familyName,

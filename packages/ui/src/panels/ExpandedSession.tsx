@@ -15,6 +15,8 @@ import {
   FileLock2,
   Hand,
   MessageSquare,
+  MessagesSquare,
+  SquareTerminal,
   Radio,
   TerminalSquare,
   Wrench,
@@ -27,8 +29,10 @@ import { isActive, useApp } from '../store';
 import { useShallow } from 'zustand/react/shallow';
 import { send } from '../engine';
 import { STATUS, compact, modelLabel, shortPath } from '../lib';
+import { openTerminal } from '../terminal';
 
 const EMPTY: FeedItem[] = [];
+const MATRIX_DOT = { connecting: 'var(--color-st-thinking)', online: 'var(--color-st-idle)', error: 'var(--color-st-error)' } as const;
 
 export function ExpandedSession() {
   const id = useApp((s) => s.expanded)!;
@@ -105,6 +109,22 @@ function Header({ st, color }: { st: SessionState; color: string }) {
           </motion.div>
         </AnimatePresence>
       </div>
+      <button
+        onClick={() => openTerminal(st.config.cwd, st.config.name)}
+        title={`Open a terminal in ${st.config.cwd}`}
+        className="flex items-center gap-1.5 rounded-xl border border-line px-3 py-1.5 text-[12.5px] text-ink-2 hover:border-line-hi hover:text-ink"
+      >
+        <SquareTerminal size={14} /> Terminal
+      </button>
+      <button
+        onClick={() => useApp.getState().set({ matrixFor: st.id })}
+        title={st.matrix?.state === 'online' ? `Listening on Matrix as ${st.matrix.userId}` : 'Answer mentions in Matrix rooms'}
+        className="flex items-center gap-1.5 rounded-xl border border-line px-3 py-1.5 text-[12.5px] text-ink-2 hover:border-line-hi hover:text-ink"
+      >
+        <MessagesSquare size={14} />
+        {st.config.matrix?.enabled ? 'Chat' : 'Enable chat'}
+        {st.matrix && st.matrix.state !== 'off' && <span className="h-1.5 w-1.5 rounded-full" style={{ background: MATRIX_DOT[st.matrix.state] }} />}
+      </button>
       {isActive(st) && (
         <button onClick={() => send({ t: 'session.interrupt', id: st.id })} className="flex items-center gap-1.5 rounded-xl border border-line px-3 py-1.5 text-[12.5px] text-ink-2 hover:border-st-waiting hover:text-st-waiting">
           <Hand size={14} /> Interrupt

@@ -106,7 +106,7 @@ export class RealSession extends BaseSession {
       includePartialMessages: true,
       env,
       resume: cfg.resumeId ?? undefined,
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: sinnectPrompt(cfg, hub.roster(id)) },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: [this.rolePrompt(), sinnectPrompt(cfg, hub.roster(id))].filter(Boolean).join('\n\n') },
       settingSources: ['user', 'project', 'local'],
       hooks: {
         PreToolUse: [{ matcher: 'Edit|Write|MultiEdit|NotebookEdit', hooks: [preToolUse] }],
@@ -131,7 +131,7 @@ export class RealSession extends BaseSession {
 
     if (cfg.awareness !== 'solo') {
       options.mcpServers = { sinnect: this.hubServer() };
-      options.allowedTools = HUB_TOOLS.map((t) => `mcp__sinnect__${t}`);
+      options.allowedTools = [...HUB_TOOLS, ...(cfg.coordinator ? ['hub_spawn'] : [])].map((t) => `mcp__sinnect__${t}`);
     }
 
     if (cfg.resumeId) this.loadHistory(cfg.resumeId).catch(() => {});
@@ -206,6 +206,22 @@ export class RealSession extends BaseSession {
           { id: z.string(), choice: z.enum(['yield', 'insist']), note: z.string().max(200) },
           async (a) => text(hub.negotiate(id, a.id, a.choice, a.note)),
         ),
+        ...(this.config.coordinator
+          ? [
+              tool(
+                'hub_spawn',
+                'Start a new Claude session on the Sinnect canvas, e.g. one per Crux team at hand-off. The user approves it first. It joins the family (created if new) and is linked to you.',
+                {
+                  name: z.string().max(60).describe('Card name, e.g. the team id'),
+                  folder: z.string().describe('Working folder, relative to yours or absolute. Created if missing.'),
+                  agent: z.string().optional().describe('Crux agent (role) id the session runs as'),
+                  family: z.string().max(40).optional().describe('Family to put it in, e.g. the team id'),
+                  prompt: z.string().max(4000).optional().describe('First message for the session'),
+                },
+                async (req) => text(await this.spawnSession(req)),
+              ),
+            ]
+          : []),
       ],
     });
   }
@@ -347,7 +363,7 @@ export class RealSession extends BaseSession {
         if (msg.subtype === 'success') this.feed('result', `Done in ${Math.round(msg.duration_ms / 1000)}s`);
         else this.feed('error', `Turn ended: ${msg.subtype}`, { isError: true });
         this.publish();
-        this.onTurnEnd();
+        this.onTurnEnd(msg.subtype === 'success' ? msg.result : `Turn ended: ${msg.subtype}`);
         return;
       }
       default:
@@ -412,6 +428,7 @@ export class RealSession extends BaseSession {
     const msg = err instanceof Error ? err.message : String(err);
     this.state.error = msg;
     this.feed('error', msg, { isError: true });
+    this.answerMatrix(`Error: ${msg}`);
     this.busy = false;
     this.setStatus('error', clip(msg, 80));
     this.publish(true);
