@@ -14,6 +14,7 @@ import type {
   SessionTemplate,
   WorkspaceInfo,
 } from '@engine/protocol';
+import { onBoard, splitSessions } from './workspace-scope';
 
 export type ConnState = 'connecting' | 'open' | 'closed';
 
@@ -54,6 +55,10 @@ export interface UiState {
   pulses: Pulse[];
   workspaces: WorkspaceInfo[];
   workspaceName: string;
+  /** The open workspace's id; its sessions carry it as config.workspace. */
+  workspaceId: string;
+  /** Running sessions of the other workspaces (see workspace-scope.ts). */
+  parked: Record<string, SessionState>;
   templates: SessionTemplate[];
   memory: MemoryNote[];
   /** Ids of notes for the "Sinnect learned N things" card, newest last. */
@@ -78,6 +83,8 @@ export interface UiState {
   set(p: Partial<UiState>): void;
 }
 
+export const newWorkspaceId = () => `w_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
 const MAX_FEED = 1500;
 
 export const useApp = create<UiState>((set, get) => ({
@@ -94,6 +101,8 @@ export const useApp = create<UiState>((set, get) => ({
   pulses: [],
   workspaces: [],
   workspaceName: 'My workspace',
+  workspaceId: newWorkspaceId(),
+  parked: {},
   templates: [],
   memory: [],
   learned: [],
@@ -116,13 +125,15 @@ export const useApp = create<UiState>((set, get) => ({
     switch (msg.t) {
       case 'ready': {
         const snap = msg.snapshot;
-        const sessions = { ...s.sessions };
-        for (const st of snap.sessions) sessions[st.id] = st;
+        // Other workspaces' sessions are parked. A parked one the engine no longer has is gone (its file can resume it).
+        const split = splitSessions(snap.sessions, s.workspaceId);
+        const sessions = { ...s.sessions, ...split.sessions };
         const dormant = { ...s.dormant };
         for (const st of snap.sessions) delete dormant[st.id];
         set({
           settings: snap.settings,
           sessions,
+          parked: split.parked,
           dormant,
           feeds: { ...s.feeds, ...snap.feeds },
           claims: snap.claims,
@@ -137,7 +148,7 @@ export const useApp = create<UiState>((set, get) => ({
         });
         // Engine knows sessions the canvas has no node for (e.g. after a UI reload): place them.
         const have = new Set(get().nodes.filter((n) => n.type === 'session').map((n) => n.id));
-        const missing = snap.sessions.filter((x) => !have.has(x.id));
+        const missing = Object.values(split.sessions).filter((x) => !have.has(x.id));
         if (missing.length) {
           set({
             nodes: [
@@ -155,8 +166,17 @@ export const useApp = create<UiState>((set, get) => ({
       }
       case 'session.state': {
         const st = msg.state;
+        if (!onBoard(st, s.workspaceId)) {
+          // A session of a workspace in the background: it keeps running out of sight.
+          const { [st.id]: _, ...sessions } = s.sessions;
+          set({ parked: { ...s.parked, [st.id]: st }, ...(s.sessions[st.id] ? { sessions } : {}) });
+          return;
+        }
         const isNew = !s.sessions[st.id];
-        set({ sessions: { ...s.sessions, [st.id]: st } });
+        if (s.parked[st.id]) {
+          const { [st.id]: _, ...parked } = s.parked;
+          set({ sessions: { ...s.sessions, [st.id]: st }, parked });
+        } else set({ sessions: { ...s.sessions, [st.id]: st } });
         // A boss just spawned a helper: put its card next to the boss.
         const parentId = st.config.parentId;
         if (isNew && parentId && !s.nodes.some((n) => n.id === st.id)) {
@@ -168,10 +188,13 @@ export const useApp = create<UiState>((set, get) => ({
       case 'session.removed': {
         const sessions = { ...s.sessions };
         delete sessions[msg.id];
+        const parked = { ...s.parked };
+        delete parked[msg.id];
         const feeds = { ...s.feeds };
         delete feeds[msg.id];
         set({
           sessions,
+          parked,
           feeds,
           nodes: s.nodes.filter((n) => n.id !== msg.id),
           expanded: s.expanded === msg.id ? null : s.expanded,

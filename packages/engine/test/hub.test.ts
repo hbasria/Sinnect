@@ -9,6 +9,7 @@ function setup(sessions: Partial<HubSessionInfo>[], links: Link[] = []) {
     name: s.name ?? `S${i + 1}`,
     priority: s.priority ?? 3,
     familyId: s.familyId ?? null,
+    workspace: s.workspace ?? null,
     awareness: s.awareness ?? 'everyone',
     goal: s.goal ?? '',
     status: 'working',
@@ -152,4 +153,18 @@ test('wake chains stop after the limit (no ping-pong)', () => {
   assert.equal(r.woke, false);
   assert.equal(r.held, 'wake chain limit');
   assert.equal(delivered.at(-1)!.wake, false);
+});
+
+test('another workspace is out of sight, whatever the awareness, but files are still shared', () => {
+  const { hub } = setup(
+    [{ workspace: 'w1' }, { workspace: 'w1' }, { workspace: 'w2', familyId: 'f1' }, { workspace: 'w2', awareness: 'family', familyId: 'f1' }],
+    [{ id: 'l', a: 's1', b: 's3' }],
+  );
+  assert.deepEqual(hub.visibleTo('s1').map((s) => s.id), ['s2']);
+  assert.deepEqual(hub.visibleTo('s4').map((s) => s.id), ['s3']);
+  // A link drawn before the switch doesn't reach across either.
+  assert.equal(hub.send('s1', 's3', 'hi').ok, false);
+  // Two boards editing one file still have to settle it.
+  hub.requestEdit('s1', '/a.ts');
+  assert.equal(hub.requestEdit('s3', '/a.ts').ok, false);
 });

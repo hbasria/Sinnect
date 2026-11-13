@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Cost } from '../components/Cost';
 import NumberFlow from '@number-flow/react';
@@ -11,6 +11,7 @@ import { testNotification } from '../notify';
 import { useReactFlow } from '@xyflow/react';
 import { totalTokens, useApp } from '../store';
 import { deleteWorkspace, isOpenWorkspace, loadWorkspace, newWorkspace, saveWorkspace } from '../workspace';
+import { liveByWorkspace } from '../workspace-scope';
 import { send } from '../engine';
 import { checkForUpdate, installUpdate, useUpdate } from '../updater';
 import { spring } from '../lib';
@@ -125,6 +126,8 @@ export function WorkspacesSheet() {
   const open = useApp((s) => s.workspacesOpen);
   const items = useApp((s) => s.workspaces).filter((w) => !w.name.startsWith('__'));
   const current = useApp((s) => s.workspaceName);
+  const parked = useApp((s) => s.parked);
+  const live = useMemo(() => liveByWorkspace(parked), [parked]);
   const [name, setName] = useState('');
   const close = () => useApp.getState().set({ workspacesOpen: false });
   return (
@@ -134,7 +137,7 @@ export function WorkspacesSheet() {
         <button onClick={() => (saveWorkspace(name.trim() || current), setName(''))} className="shrink-0 rounded-[10px] bg-accent px-3 text-[12.5px] font-semibold text-white">
           Save as
         </button>
-        <button onClick={() => (newWorkspace(), close())} title="Close every session and start an empty workspace" className="flex shrink-0 items-center gap-1 rounded-[10px] border border-line px-3 text-[12.5px] text-ink-2 hover:border-line-hi hover:text-ink">
+        <button onClick={() => (newWorkspace(), close())} title="Start an empty workspace. The open one is saved first, and you choose whether its sessions keep running." className="flex shrink-0 items-center gap-1 rounded-[10px] border border-line px-3 text-[12.5px] text-ink-2 hover:border-line-hi hover:text-ink">
           <Plus size={14} /> New
         </button>
       </div>
@@ -147,6 +150,7 @@ export function WorkspacesSheet() {
               <div className="flex items-center gap-1.5">
                 <span className="truncate text-[13px]">{w.name}</span>
                 {isOpenWorkspace(w.name, current) && <span className="shrink-0 rounded-full bg-accent-soft px-1.5 text-[10.5px] text-accent-hi">open</span>}
+                {!isOpenWorkspace(w.name, current) && w.id && live[w.id] ? <span className="shrink-0 rounded-full bg-st-working/15 px-1.5 text-[10.5px] text-st-working">{live[w.id]} running</span> : null}
               </div>
               <div className="text-[11.5px] text-ink-3">
                 {w.sessions} session{w.sessions === 1 ? '' : 's'} · {new Date(w.savedAt).toLocaleString()}

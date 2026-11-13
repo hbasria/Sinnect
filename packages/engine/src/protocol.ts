@@ -55,6 +55,8 @@ export interface SessionConfig {
   workerKind?: WorkerKind | null;
   /** May this session spawn helpers? Missing = yes (unless it is a helper itself). */
   canSpawn?: boolean;
+  /** Id of the workspace (board) it belongs to. Sessions only see their own workspace's sessions. */
+  workspace?: string | null;
 }
 
 /** Live helper numbers, shown on the boss card. */
@@ -351,7 +353,7 @@ export type ClientMsg =
   | { t: 'session.interrupt'; id: string }
   | { t: 'session.stop'; id: string }
   | { t: 'session.remove'; id: string }
-  | { t: 'session.update'; id: string; patch: Partial<Pick<SessionConfig, 'name' | 'priority' | 'awareness' | 'permission' | 'familyId' | 'canSpawn'>> }
+  | { t: 'session.update'; id: string; patch: Partial<Pick<SessionConfig, 'name' | 'priority' | 'awareness' | 'permission' | 'familyId' | 'canSpawn' | 'workspace'>> }
   | { t: 'prompt.respond'; response: PromptResponse }
   | { t: 'links.set'; links: Link[] }
   | { t: 'families.set'; families: Family[] }
@@ -409,6 +411,8 @@ export interface WorkspaceInfo {
   name: string;
   savedAt: number;
   sessions: number;
+  /** The board's id, which its sessions carry as config.workspace. Older files have none. */
+  id?: string | null;
 }
 
 export const DEFAULT_MODELS = [

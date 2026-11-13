@@ -80,6 +80,8 @@ export async function connect() {
 }
 
 export function send(msg: ClientMsg) {
+  // A new or resumed session belongs to the open workspace unless it already says which.
+  if (msg.t === 'session.create' && !msg.config.workspace) msg = { ...msg, config: { ...msg.config, workspace: useApp.getState().workspaceId } };
   if (ws && ws.readyState === WebSocket.OPEN && useApp.getState().conn === 'open') ws.send(JSON.stringify(msg));
   else outbox.push(msg);
 }

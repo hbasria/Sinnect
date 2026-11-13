@@ -19,6 +19,7 @@ import { startNotifications } from './notify';
 import { focusSession } from './actions';
 import { LearnedCard, MemorySheet } from './panels/Memory';
 import { Onboarding } from './panels/Onboarding';
+import { LeaveDialog } from './panels/LeaveDialog';
 
 let booted = false;
 
@@ -87,6 +88,7 @@ function Shell() {
       <MemorySheet />
       <LearnedCard />
       <CommandPalette />
+      <LeaveDialog />
       <Onboarding rf={rf} />
       <Intro />
       <Toaster theme="dark" position="bottom-center" toastOptions={{ style: { background: '#1e1e1f', border: '1px solid #363638', color: '#ededec' } }} />

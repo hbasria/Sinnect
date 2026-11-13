@@ -126,7 +126,7 @@ export function startNotifications() {
       const had = new Set(old.prompts.map((p) => p.requestId));
       for (const p of s.prompts) {
         if (had.has(p.requestId)) continue;
-        const name = s.sessions[p.sessionId]?.config.name ?? 'A session';
+        const name = (s.sessions[p.sessionId] ?? s.parked[p.sessionId])?.config.name ?? 'A session';
         push({ kind: 'needs', sessionId: p.sessionId, name, detail: clip(promptDetail(p)) });
       }
     }

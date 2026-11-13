@@ -38,7 +38,8 @@ export function Canvas() {
   const nodeKey = nodes.map((n) => n.id).join(',');
   const edges = useMemo(() => {
     const ids = new Set(nodeKey.split(','));
-    return [...linkEdges(links), ...workerEdges(useApp.getState().sessions, ids)];
+    // The link list is shared by every workspace: draw only the ones between cards on this board.
+    return [...linkEdges(links.filter((l) => ids.has(l.a) && ids.has(l.b))), ...workerEdges(useApp.getState().sessions, ids)];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [links, helperKey, nodeKey]);
   const rf = useReactFlow();

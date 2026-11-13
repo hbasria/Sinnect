@@ -15,6 +15,8 @@ export interface HubSessionInfo {
   activity: string;
   /** Helpers belong to a boss and stay out of everyone else's roster. */
   parentId?: string | null;
+  /** Workspace (board) id. Sessions only know about their own workspace. */
+  workspace?: string | null;
 }
 
 export interface HubDeps {
@@ -88,7 +90,8 @@ export class Hub {
   visibleTo(id: string): HubSessionInfo[] {
     const me = this.info(id);
     if (!me || me.awareness === 'solo') return [];
-    const all = this.deps.sessions().filter((s) => s.id !== id && !s.parentId);
+    // Another workspace is another board: nobody there is visible, whatever the awareness.
+    const all = this.deps.sessions().filter((s) => s.id !== id && !s.parentId && (s.workspace ?? null) === (me.workspace ?? null));
     if (me.awareness === 'everyone') return all;
     const linked = new Set(
       this.deps
